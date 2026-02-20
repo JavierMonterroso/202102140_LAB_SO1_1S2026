@@ -1,16 +1,20 @@
 FROM golang:1.22-alpine AS builder
+
 WORKDIR /app
 
 COPY go.mod ./
+
 RUN go mod download
 
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o api2 .
+COPY main.go ./
 
-FROM gcr.io/distroless/static:nonroot
-WORKDIR /
-COPY --from=builder /app/api2 /api2
+RUN go build -o api2 main.go
+
+FROM alpine:latest
+WORKDIR /root/
+
+COPY --from=builder /app/api2 .
 
 EXPOSE 8082
-USER nonroot:nonroot
-ENTRYPOINT ["/api2"]
+
+CMD ["./api2"]

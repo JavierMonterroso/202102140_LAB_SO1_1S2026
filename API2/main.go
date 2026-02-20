@@ -24,24 +24,27 @@ type CallResponse struct {
 }
 
 func main() {
+
 	miCarnet := os.Getenv("CARNET")
 	if miCarnet == "" {
 		miCarnet = "202102140"
 	}
 
-	// API1 URL por ENV (fallback local)
+	// API1 (VM1)
 	api1URL := os.Getenv("API1_HEALTH_URL")
 	if api1URL == "" {
-		api1URL = "http://localhost:8081/health"
+		api1URL = "http://vm-api-1:8081/health"
 	}
 
-	// API3 URL por ENV (fallback con X)
+	// API3 (VM2)
 	api3URL := os.Getenv("API3_HEALTH_URL")
 	if api3URL == "" {
-		api3URL = "http://192.168.122.X:8083/health"
+		api3URL = "http://vm-api-2:8083/health"
 	}
 
+	// 1. Endpoint /health
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -54,24 +57,31 @@ func main() {
 			VM:        "VM1",
 			Carnet:    miCarnet,
 		}
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(res)
 	})
 
+	// 2. Llamada a API1 (VM1)
 	http.HandleFunc("/api2/"+miCarnet+"/call-api1", func(w http.ResponseWriter, r *http.Request) {
+
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		callAPI(w, "API1", api1URL, miCarnet)
+
+		callAPI(w, "API1", "VM1", api1URL, miCarnet)
 	})
 
+	// 3. Llamada a API3 (VM2)
 	http.HandleFunc("/api2/"+miCarnet+"/call-api3", func(w http.ResponseWriter, r *http.Request) {
+
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		callAPI(w, "API3", api3URL, miCarnet)
+
+		callAPI(w, "API3", "VM2", api3URL, miCarnet)
 	})
 
 	fmt.Println("API2 iniciada en el puerto 8082...")
@@ -80,16 +90,19 @@ func main() {
 	}
 }
 
-func callAPI(w http.ResponseWriter, targetName, url, carnet string) {
+// Función auxiliar
+func callAPI(w http.ResponseWriter, targetName string, targetVM string, url string, carnet string) {
+
 	w.Header().Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get(url)
+
 	if err != nil || resp.StatusCode != http.StatusOK {
-		w.WriteHeader(http.StatusServiceUnavailable)
+
 		_ = json.NewEncoder(w).Encode(CallResponse{
 			APIName:    targetName,
-			Message:    "ERROR: The " + targetName + " located on its VM is not working",
+			Message:    "ERROR: The " + targetName + " located on the " + targetVM + " is not working",
 			Connection: false,
 			Carnet:     carnet,
 		})
@@ -99,7 +112,7 @@ func callAPI(w http.ResponseWriter, targetName, url, carnet string) {
 
 	_ = json.NewEncoder(w).Encode(CallResponse{
 		APIName:    targetName,
-		Message:    "The " + targetName + " located on its VM is working",
+		Message:    "The " + targetName + " located on the " + targetVM + " is working",
 		Connection: true,
 		Carnet:     carnet,
 	})
