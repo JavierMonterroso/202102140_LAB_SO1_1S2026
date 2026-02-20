@@ -1,11 +1,26 @@
-# Manual Técnico de la Práctica 1 (Grupal) – Redes de Computadoras 2
-
----
-
-### INTRODUCCIÓN
-La presente práctica tiene como finalidad
+<img src='https://user-images.githubusercontent.com/36779113/128587817-1a6c2fdc-d106-4dd3-b092-104c8299bded.png' background='white'>
 
 
+## Universidad de San Carlos de Guatemala, Junio 2025
+## Facultad de Ingeniería
+## Escuela de Ciencias y Sistemas
+## LABORATORIO SISTEMAS OPERATIVOS 1 S12026
+
+
+| TABLA DE DATOS  | 
+| ------------- | 
+| Carné:    202102140|
+| Nombre:    Javier Andrés Monterroso García|
+
+<br> 
+
+<center>
+
+# MANUAL TÉCNICO
+
+</center>
+
+<br> 
 
 
 
