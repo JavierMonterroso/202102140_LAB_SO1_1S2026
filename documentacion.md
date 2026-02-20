@@ -1217,7 +1217,7 @@ En VM2 realicé un procedimiento similar.
 
 #### VM1:
 ![alt text](img/image.png)
-![alt text](img/mage-1.png)
+![alt text](img/image-1.png)
 
 <br>
 
