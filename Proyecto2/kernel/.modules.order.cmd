@@ -1,0 +1,1 @@
+savedcmd_/home/javier/Documentos/SO1_PY1/Proyecto2/kernel/modules.order := {   echo /home/javier/Documentos/SO1_PY1/Proyecto2/kernel/continfo_pr2_so1.o; :; } > /home/javier/Documentos/SO1_PY1/Proyecto2/kernel/modules.order

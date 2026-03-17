@@ -1,0 +1,1 @@
+savedcmd_/home/javier/Documentos/SO1_PY1/Proyecto2/kernel/continfo_pr2_so1.ko := ld -r -m elf_x86_64 -z noexecstack --build-id=sha1  -T scripts/module.lds -o /home/javier/Documentos/SO1_PY1/Proyecto2/kernel/continfo_pr2_so1.ko /home/javier/Documentos/SO1_PY1/Proyecto2/kernel/continfo_pr2_so1.o /home/javier/Documentos/SO1_PY1/Proyecto2/kernel/continfo_pr2_so1.mod.o
