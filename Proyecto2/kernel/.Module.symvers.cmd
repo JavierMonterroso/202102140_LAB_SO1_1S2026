@@ -1,1 +1,0 @@
-savedcmd_/home/javier/Documentos/SO1_PY1/Proyecto2/kernel/Module.symvers :=  scripts/mod/modpost -M -m -a      -o /home/javier/Documentos/SO1_PY1/Proyecto2/kernel/Module.symvers -T /home/javier/Documentos/SO1_PY1/Proyecto2/kernel/modules.order -i Module.symvers -e 

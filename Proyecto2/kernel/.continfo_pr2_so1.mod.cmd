@@ -1,1 +1,0 @@
-savedcmd_/home/javier/Documentos/SO1_PY1/Proyecto2/kernel/continfo_pr2_so1.mod := printf '%s\n'   continfo_pr2_so1.o | awk '!x[$$0]++ { print("/home/javier/Documentos/SO1_PY1/Proyecto2/kernel/"$$0) }' > /home/javier/Documentos/SO1_PY1/Proyecto2/kernel/continfo_pr2_so1.mod
