@@ -280,5 +280,9 @@ static void __exit salir_modulo(void)
     printk(KERN_INFO "[continfo] =====================================\n");
 }
 
+
+/*
+Prueba
+*/
 module_init(iniciar_modulo);
 module_exit(salir_modulo);

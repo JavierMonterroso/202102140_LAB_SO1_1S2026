@@ -7,255 +7,159 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
 const (
-	rutaProc          = "/proc/continfo_pr2_so1_202102140"
-	direccionValkey   = "localhost:6379"
-	intervaloLoop     = 20 * time.Second
-	identificadorCron = "CRON_PROYECTO2_SO1_202102140"
-	metaBajos         = 3
-	metaAltos         = 2
-	ttlRegistros      = 24 * time.Hour
+	rutaProc           = "/proc/continfo_pr2_so1_202102140"
+	intervaloLectura   = 20 * time.Second
+	nombreScriptCron   = "crear_contenedores.sh"
+	nombreScriptModulo = "cargar_modulo.sh"
 )
-
-type MetricasSistema struct {
-	RAMTotalKB uint64
-	RAMLibreKB uint64
-	RAMUsoKB   uint64
-}
 
 type Proceso struct {
-	PID      int
-	TGID     int
-	Nombre   string
-	Estado   string
-	PIDPadre int
-	CMDLine  string
-	VSZKB    uint64
-	RSSKB    uint64
-	MemPct   float64
-	CPUPct   float64
+	PID               int
+	Nombre            string
+	Comando           string
+	VSZKB             uint64
+	RSSKB             uint64
+	MemoriaPorcentaje uint64
+	CPUPorcentaje     uint64
 }
 
-type LecturaProc struct {
-	Sistema  MetricasSistema
-	Procesos []Proceso
+type DatosProc struct {
+	RAMTotalKB    uint64
+	RAMLibreKB    uint64
+	RAMUsadaKB    uint64
+	TotalProcesos int
+	Procesos      []Proceso
 }
-
-type TipoContenedor string
-
-const (
-	TipoBajo    TipoContenedor = "bajo"
-	TipoAlto    TipoContenedor = "alto"
-	TipoIgnorar TipoContenedor = "ignorar"
-)
 
 var (
-	ctx    = context.Background()
-	valkey *redis.Client
+	ctx context.Context
+	rdb *redis.Client
 )
 
 func main() {
-	rutaLoadModule := filepath.Join(rutaProyecto(), "scripts", "load_module.sh")
-	rutaCreateContainer := filepath.Join(rutaProyecto(), "scripts", "create_container.sh")
+	ctx = context.Background()
 
-	if len(os.Args) > 1 && os.Args[1] == "--cronjob" {
-		log.Println("CRONJOB: ejecución iniciada")
-		if err := ejecutarScript(rutaCreateContainer); err != nil {
-			log.Printf("CRONJOB: error al ejecutar create_container.sh: %v", err)
-		} else {
-			log.Println("CRONJOB: ejecución finalizada")
-		}
-		return
-	}
-
-	log.Println("DAEMON: iniciando Proyecto 2...")
+	log.Println("========================================")
+	log.Println("Iniciando daemon del Proyecto 2")
+	log.Println("========================================")
 
 	conectarValkey()
 
-	if err := ejecutarScript(rutaLoadModule); err != nil {
-		log.Printf("DAEMON: no se pudo cargar el módulo: %v", err)
+	err := ejecutarScriptCargaModulo()
+	if err != nil {
+		log.Printf("ERROR cargando modulo: %v", err)
 	} else {
-		log.Println("DAEMON: módulo cargado correctamente")
+		log.Println("Modulo cargado correctamente")
 	}
 
-	if err := crearCronjob(); err != nil {
-		log.Printf("DAEMON: no se pudo crear el cronjob: %v", err)
+	err = crearCronjob()
+	if err != nil {
+		log.Printf("ERROR creando cronjob: %v", err)
 	} else {
-		log.Println("DAEMON: cronjob instalado correctamente")
+		log.Println("Cronjob creado correctamente")
 	}
 
-	seniales := make(chan os.Signal, 1)
-	signal.Notify(seniales, syscall.SIGINT, syscall.SIGTERM)
-
-	ticker := time.NewTicker(intervaloLoop)
+	log.Println("Entrando al loop principal...")
+	ticker := time.NewTicker(intervaloLectura)
 	defer ticker.Stop()
 
-	log.Printf("DAEMON: loop principal iniciado, intervalo=%s", intervaloLoop)
-
 	for {
-		select {
-		case <-ticker.C:
-			log.Println("DAEMON: ---------------- INICIO CICLO ----------------")
-			if err := ejecutarCiclo(); err != nil {
-				log.Printf("DAEMON: error en ciclo principal: %v", err)
+		log.Println("--------------------------------------------------")
+		log.Println("Nueva iteracion:", time.Now().Format("2006-01-02 15:04:05"))
+
+		datos, err := leerArchivoProc(rutaProc)
+		if err != nil {
+			log.Printf("ERROR leyendo %s: %v", rutaProc, err)
+		} else {
+			imprimirResumen(datos)
+			err = guardarEnValkey(datos)
+			if err != nil {
+				log.Printf("ERROR guardando en Valkey: %v", err)
+			} else {
+				log.Println("Datos guardados en Valkey correctamente")
 			}
-			log.Println("DAEMON: ---------------- FIN CICLO -------------------")
-		case s := <-seniales:
-			log.Printf("DAEMON: señal recibida: %v", s)
-			limpiezaFinal()
-			return
 		}
+
+		<-ticker.C
 	}
-}
-
-func rutaProyecto() string {
-	ejecutable, err := os.Executable()
-	if err != nil {
-		return "/home/javier/pruebas_de_estructuras/proyecto2"
-	}
-
-	dirDaemon := filepath.Dir(ejecutable)
-	return filepath.Dir(dirDaemon)
-}
-
-func ejecutarCiclo() error {
-	lectura, err := leerArchivoProc(rutaProc)
-	if err != nil {
-		return err
-	}
-
-	log.Printf("DAEMON: métricas sistema -> RAM_TOTAL=%d KB RAM_LIBRE=%d KB RAM_USO=%d KB",
-		lectura.Sistema.RAMTotalKB,
-		lectura.Sistema.RAMLibreKB,
-		lectura.Sistema.RAMUsoKB,
-	)
-
-	log.Printf("DAEMON: total de procesos parseados desde /proc = %d", len(lectura.Procesos))
-
-	guardarEnValkey(lectura)
-
-	bajos, altos := clasificarProcesos(lectura.Procesos)
-
-	log.Printf("DAEMON: clasificación actual -> bajos=%d altos=%d", len(bajos), len(altos))
-
-	for _, p := range bajos {
-		log.Printf("DAEMON: BAJO -> PID=%d NOMBRE=%s RSS=%d CPU=%.2f CMDLINE=%s",
-			p.PID, p.Nombre, p.RSSKB, p.CPUPct, p.CMDLine)
-	}
-
-	for _, p := range altos {
-		log.Printf("DAEMON: ALTO -> PID=%d NOMBRE=%s RSS=%d CPU=%.2f CMDLINE=%s",
-			p.PID, p.Nombre, p.RSSKB, p.CPUPct, p.CMDLine)
-	}
-
-	aplicarPoliticaEliminacion(bajos, altos)
-
-	if len(bajos) < metaBajos {
-		log.Printf("DAEMON: aún faltan contenedores bajos -> actual=%d requerido=%d", len(bajos), metaBajos)
-	}
-	if len(altos) < metaAltos {
-		log.Printf("DAEMON: aún faltan contenedores altos -> actual=%d requerido=%d", len(altos), metaAltos)
-	}
-
-	return nil
 }
 
 func conectarValkey() {
-	valkey = redis.NewClient(&redis.Options{
-		Addr: direccionValkey,
+	rdb = redis.NewClient(&redis.Options{
+		Addr: "localhost:6379",
 	})
 
-	if _, err := valkey.Ping(ctx).Result(); err != nil {
-		log.Fatalf("DAEMON: no se pudo conectar a Valkey: %v", err)
+	_, err := rdb.Ping(ctx).Result()
+	if err != nil {
+		log.Fatalf("No se pudo conectar a Valkey: %v", err)
 	}
 
-	log.Println("DAEMON: conexión a Valkey exitosa")
+	log.Println("Conexion a Valkey exitosa")
 }
 
-func ejecutarScript(ruta string) error {
-	log.Printf("DAEMON: ejecutando script %s", ruta)
-
-	cmd := exec.Command("bash", ruta)
-	salida, err := cmd.CombinedOutput()
-
-	if len(salida) > 0 {
-		log.Printf("DAEMON: salida de %s:\n%s", ruta, string(salida))
+func obtenerRutaScript(nombre string) string {
+	rutaEjecutable, err := os.Executable()
+	if err != nil {
+		log.Printf("No se pudo obtener la ruta del ejecutable: %v", err)
+		return ""
 	}
+
+	directorioEjecutable := filepath.Dir(rutaEjecutable)
+	ruta := filepath.Join(directorioEjecutable, "scripts", nombre)
+	return ruta
+}
+
+func ejecutarScriptCargaModulo() error {
+	rutaScript := obtenerRutaScript(nombreScriptModulo)
+	log.Println("Ejecutando script de carga de modulo:", rutaScript)
+
+	cmd := exec.Command("bash", rutaScript)
+	salida, err := cmd.CombinedOutput()
+	log.Println("Salida script modulo:")
+	log.Println(string(salida))
 
 	return err
 }
 
 func crearCronjob() error {
-	ejecutable, err := os.Executable()
-	if err != nil {
-		return err
-	}
+	rutaScript := obtenerRutaScript(nombreScriptCron)
 
-	lineaCron := fmt.Sprintf("*/2 * * * * %s --cronjob #%s", ejecutable, identificadorCron)
+	// cada 2 minutos, como pide el proyecto
+	lineaCron := fmt.Sprintf("*/2 * * * * bash %s", rutaScript)
 
-	_ = exec.Command("bash", "-c",
-		fmt.Sprintf(`crontab -l 2>/dev/null | grep -v "%s" | crontab -`, identificadorCron),
-	).Run()
+	comando := fmt.Sprintf(`(crontab -l 2>/dev/null | grep -v "%s"; echo "%s") | crontab -`, nombreScriptCron, lineaCron)
 
-	cmd := exec.Command("bash", "-c",
-		fmt.Sprintf(`(crontab -l 2>/dev/null; echo '%s') | crontab -`, lineaCron),
-	)
+	log.Println("Creando cronjob con linea:", lineaCron)
 
+	cmd := exec.Command("bash", "-c", comando)
 	salida, err := cmd.CombinedOutput()
-	if len(salida) > 0 {
-		log.Printf("DAEMON: salida al crear cronjob:\n%s", string(salida))
-	}
-	if err != nil {
-		return err
-	}
+	log.Println("Salida creacion cronjob:")
+	log.Println(string(salida))
 
-	log.Printf("DAEMON: cronjob registrado -> %s", lineaCron)
-	return nil
+	return err
 }
 
-func eliminarCronjob() {
-	cmd := exec.Command("bash", "-c",
-		fmt.Sprintf(`crontab -l 2>/dev/null | grep -v "%s" | crontab -`, identificadorCron),
-	)
-	salida, err := cmd.CombinedOutput()
-	if len(salida) > 0 {
-		log.Printf("DAEMON: salida al eliminar cronjob:\n%s", string(salida))
-	}
-	if err == nil {
-		log.Println("DAEMON: cronjob eliminado correctamente")
-	}
-}
-
-func limpiezaFinal() {
-	log.Println("DAEMON: iniciando limpieza final")
-	eliminarCronjob()
-	log.Println("DAEMON: limpieza final completada")
-}
-
-func leerArchivoProc(ruta string) (*LecturaProc, error) {
-	log.Printf("DAEMON: leyendo archivo %s", ruta)
-
+func leerArchivoProc(ruta string) (*DatosProc, error) {
 	archivo, err := os.Open(ruta)
 	if err != nil {
 		return nil, err
 	}
 	defer archivo.Close()
 
-	lectura := &LecturaProc{}
-	scanner := bufio.NewScanner(archivo)
+	resultado := &DatosProc{
+		Procesos: make([]Proceso, 0),
+	}
 
-	enBloqueProcesos := false
+	scanner := bufio.NewScanner(archivo)
 
 	for scanner.Scan() {
 		linea := strings.TrimSpace(scanner.Text())
@@ -264,379 +168,134 @@ func leerArchivoProc(ruta string) (*LecturaProc, error) {
 		}
 
 		switch {
-		case strings.HasPrefix(linea, "RAM_TOTAL_KB:"):
-			lectura.Sistema.RAMTotalKB = parsearNumeroDespuesDeDosPuntos(linea)
-		case strings.HasPrefix(linea, "RAM_LIBRE_KB:"):
-			lectura.Sistema.RAMLibreKB = parsearNumeroDespuesDeDosPuntos(linea)
-		case strings.HasPrefix(linea, "RAM_USO_KB:"):
-			lectura.Sistema.RAMUsoKB = parsearNumeroDespuesDeDosPuntos(linea)
-		case linea == "PROCESOS_RELACIONADOS_CON_CONTENEDORES":
-			enBloqueProcesos = true
-		case enBloqueProcesos && strings.HasPrefix(linea, "PID="):
+		case strings.HasPrefix(linea, "RAM_TOTAL_KB="):
+			resultado.RAMTotalKB = parsearUint(strings.TrimPrefix(linea, "RAM_TOTAL_KB="))
+
+		case strings.HasPrefix(linea, "RAM_LIBRE_KB="):
+			resultado.RAMLibreKB = parsearUint(strings.TrimPrefix(linea, "RAM_LIBRE_KB="))
+
+		case strings.HasPrefix(linea, "RAM_USADA_KB="):
+			resultado.RAMUsadaKB = parsearUint(strings.TrimPrefix(linea, "RAM_USADA_KB="))
+
+		case strings.HasPrefix(linea, "TOTAL_PROCESOS="):
+			resultado.TotalProcesos = int(parsearUint(strings.TrimPrefix(linea, "TOTAL_PROCESOS=")))
+
+		case strings.HasPrefix(linea, "PID="):
 			proceso, err := parsearLineaProceso(linea)
-			if err == nil {
-				lectura.Procesos = append(lectura.Procesos, proceso)
+			if err != nil {
+				log.Printf("No se pudo parsear linea de proceso: %v", err)
+				continue
 			}
+			resultado.Procesos = append(resultado.Procesos, proceso)
 		}
 	}
 
-	return lectura, scanner.Err()
-}
-
-func parsearNumeroDespuesDeDosPuntos(linea string) uint64 {
-	partes := strings.SplitN(linea, ":", 2)
-	if len(partes) != 2 {
-		return 0
+	if err := scanner.Err(); err != nil {
+		return nil, err
 	}
-	numero, _ := strconv.ParseUint(strings.TrimSpace(partes[1]), 10, 64)
-	return numero
+
+	return resultado, nil
 }
 
 func parsearLineaProceso(linea string) (Proceso, error) {
 	var p Proceso
-	campos := dividirRespetandoComillas(linea)
 
-	for _, campo := range campos {
-		if !strings.Contains(campo, "=") {
+	partes := strings.Split(linea, "|")
+	for _, parte := range partes {
+		campo := strings.SplitN(parte, "=", 2)
+		if len(campo) != 2 {
 			continue
 		}
 
-		partes := strings.SplitN(campo, "=", 2)
-		clave := partes[0]
-		valor := strings.Trim(partes[1], `"`)
+		clave := campo[0]
+		valor := campo[1]
 
 		switch clave {
 		case "PID":
-			p.PID, _ = strconv.Atoi(valor)
-		case "TGID":
-			p.TGID, _ = strconv.Atoi(valor)
+			p.PID = int(parsearUint(valor))
 		case "NOMBRE":
 			p.Nombre = valor
-		case "STATE":
-			p.Estado = valor
-		case "PARENT_PID":
-			p.PIDPadre, _ = strconv.Atoi(valor)
-		case "CMDLINE":
-			p.CMDLine = valor
+		case "COMANDO":
+			p.Comando = valor
 		case "VSZ_KB":
-			p.VSZKB, _ = strconv.ParseUint(valor, 10, 64)
+			p.VSZKB = parsearUint(valor)
 		case "RSS_KB":
-			p.RSSKB, _ = strconv.ParseUint(valor, 10, 64)
-		case "MEM":
-			p.MemPct = parsearPorcentaje(valor)
-		case "CPU":
-			p.CPUPct = parsearPorcentaje(valor)
+			p.RSSKB = parsearUint(valor)
+		case "MEMORIA_PORCENTAJE":
+			p.MemoriaPorcentaje = parsearUint(valor)
+		case "CPU_PORCENTAJE":
+			p.CPUPorcentaje = parsearUint(valor)
 		}
 	}
 
 	return p, nil
 }
 
-func dividirRespetandoComillas(linea string) []string {
-	var resultado []string
-	var actual strings.Builder
-	enComillas := false
-
-	for _, r := range linea {
-		switch r {
-		case '"':
-			enComillas = !enComillas
-			actual.WriteRune(r)
-		case ' ':
-			if enComillas {
-				actual.WriteRune(r)
-			} else if actual.Len() > 0 {
-				resultado = append(resultado, actual.String())
-				actual.Reset()
-			}
-		default:
-			actual.WriteRune(r)
-		}
+func parsearUint(valor string) uint64 {
+	numero, err := strconv.ParseUint(strings.TrimSpace(valor), 10, 64)
+	if err != nil {
+		return 0
 	}
-
-	if actual.Len() > 0 {
-		resultado = append(resultado, actual.String())
-	}
-
-	return resultado
-}
-
-func parsearPorcentaje(valor string) float64 {
-	valor = strings.TrimSuffix(valor, "%")
-	numero, _ := strconv.ParseFloat(valor, 64)
 	return numero
 }
 
-func guardarEnValkey(lectura *LecturaProc) {
+func imprimirResumen(datos *DatosProc) {
+	log.Println("Resumen de memoria:")
+	log.Printf("RAM total: %d KB", datos.RAMTotalKB)
+	log.Printf("RAM libre: %d KB", datos.RAMLibreKB)
+	log.Printf("RAM usada: %d KB", datos.RAMUsadaKB)
+	log.Printf("Total procesos: %d", datos.TotalProcesos)
+	log.Printf("Procesos parseados: %d", len(datos.Procesos))
+
+	limite := 5
+	if len(datos.Procesos) < limite {
+		limite = len(datos.Procesos)
+	}
+
+	log.Println("Primeros procesos parseados:")
+	for i := 0; i < limite; i++ {
+		p := datos.Procesos[i]
+		log.Printf("PID=%d NOMBRE=%s CMD=%s RSS=%d CPU=%d",
+			p.PID, p.Nombre, p.Comando, p.RSSKB, p.CPUPorcentaje)
+	}
+}
+
+func guardarEnValkey(datos *DatosProc) error {
 	timestamp := time.Now().UnixMilli()
 
-	log.Printf("DAEMON: guardando snapshot en Valkey con timestamp=%d", timestamp)
-
-	claveSistema := fmt.Sprintf("so1:sistema:%d", timestamp)
-	datosSistema := map[string]interface{}{
-		"ram_total_kb": lectura.Sistema.RAMTotalKB,
-		"ram_libre_kb": lectura.Sistema.RAMLibreKB,
-		"ram_uso_kb":   lectura.Sistema.RAMUsoKB,
-		"timestamp":    timestamp,
-	}
-
-	_ = valkey.HSet(ctx, claveSistema, datosSistema).Err()
-	_ = valkey.Expire(ctx, claveSistema, ttlRegistros).Err()
-
-	for _, p := range lectura.Procesos {
-		tipo := tipoContenedor(p)
-		if tipo == TipoIgnorar {
-			continue
-		}
-
-		claveProceso := fmt.Sprintf("so1:proceso:%d:%d", p.PID, timestamp)
-		datos := map[string]interface{}{
-			"pid":       p.PID,
-			"tgid":      p.TGID,
-			"nombre":    p.Nombre,
-			"estado":    p.Estado,
-			"pid_padre": p.PIDPadre,
-			"cmdline":   p.CMDLine,
-			"vsz_kb":    p.VSZKB,
-			"rss_kb":    p.RSSKB,
-			"mem_pct":   p.MemPct,
-			"cpu_pct":   p.CPUPct,
-			"tipo":      tipo,
-			"timestamp": timestamp,
-		}
-		_ = valkey.HSet(ctx, claveProceso, datos).Err()
-		_ = valkey.Expire(ctx, claveProceso, ttlRegistros).Err()
-	}
-}
-
-func clasificarProcesos(procesos []Proceso) ([]Proceso, []Proceso) {
-	var bajos []Proceso
-	var altos []Proceso
-
-	for _, p := range procesos {
-		tipo := tipoContenedor(p)
-		switch tipo {
-		case TipoBajo:
-			bajos = append(bajos, p)
-		case TipoAlto:
-			altos = append(altos, p)
-		case TipoIgnorar:
-			log.Printf("DAEMON: ignorando proceso -> PID=%d NOMBRE=%s CMDLINE=%s", p.PID, p.Nombre, p.CMDLine)
-		}
-	}
-
-	return bajos, altos
-}
-
-func esProcesoIgnorable(p Proceso) bool {
-	nombre := strings.ToLower(p.Nombre)
-	cmd := strings.ToLower(p.CMDLine)
-
-	if strings.Contains(nombre, "grafana") || strings.Contains(cmd, "grafana") {
-		return true
-	}
-	if strings.Contains(nombre, "valkey") || strings.Contains(cmd, "valkey") {
-		return true
-	}
-	if strings.Contains(nombre, "valkey-server") || strings.Contains(cmd, "valkey-server") {
-		return true
-	}
-	if strings.Contains(nombre, "redis") || strings.Contains(cmd, "redis") {
-		return true
-	}
-	return false
-}
-
-func tipoContenedor(p Proceso) TipoContenedor {
-	if esProcesoIgnorable(p) {
-		return TipoIgnorar
-	}
-
-	cmd := strings.ToLower(p.CMDLine)
-
-	if strings.Contains(cmd, "go-client") {
-		return TipoAlto
-	}
-	if strings.Contains(cmd, "bc") || strings.Contains(cmd, "2^20") {
-		return TipoAlto
-	}
-	if p.RSSKB >= 50000 || p.CPUPct >= 20.0 {
-		return TipoAlto
-	}
-
-	return TipoBajo
-}
-
-func aplicarPoliticaEliminacion(bajos, altos []Proceso) {
-	log.Println("DAEMON: aplicando política de eliminación")
-
-	ordenarProcesosPorConsumo(bajos)
-	ordenarProcesosPorConsumo(altos)
-
-	if len(bajos) > metaBajos {
-		exceso := len(bajos) - metaBajos
-		log.Printf("DAEMON: sobran %d contenedores bajos, se eliminarán los más pesados", exceso)
-		for i := 0; i < exceso; i++ {
-			log.Printf("DAEMON: candidato eliminación BAJO -> PID=%d RSS=%d CPU=%.2f VSZ=%d CMDLINE=%s",
-				bajos[i].PID, bajos[i].RSSKB, bajos[i].CPUPct, bajos[i].VSZKB, bajos[i].CMDLine)
-			eliminarContenedor(bajos[i], "exceso_bajo")
-		}
-	} else {
-		log.Println("DAEMON: no sobran contenedores bajos")
-	}
-
-	if len(altos) > metaAltos {
-		exceso := len(altos) - metaAltos
-		log.Printf("DAEMON: sobran %d contenedores altos, se eliminarán los más pesados", exceso)
-		for i := 0; i < exceso; i++ {
-			log.Printf("DAEMON: candidato eliminación ALTO -> PID=%d RSS=%d CPU=%.2f VSZ=%d CMDLINE=%s",
-				altos[i].PID, altos[i].RSSKB, altos[i].CPUPct, altos[i].VSZKB, altos[i].CMDLine)
-			eliminarContenedor(altos[i], "exceso_alto")
-		}
-	} else {
-		log.Println("DAEMON: no sobran contenedores altos")
-	}
-}
-
-func ordenarProcesosPorConsumo(lista []Proceso) {
-	sort.Slice(lista, func(i, j int) bool {
-		if lista[i].RSSKB != lista[j].RSSKB {
-			return lista[i].RSSKB > lista[j].RSSKB
-		}
-		if lista[i].CPUPct != lista[j].CPUPct {
-			return lista[i].CPUPct > lista[j].CPUPct
-		}
-		return lista[i].VSZKB > lista[j].VSZKB
-	})
-}
-
-func obtenerNombreContenedor(p Proceso) string {
-	log.Printf("DAEMON: intentando identificar contenedor para PID=%d CMDLINE=%s", p.PID, p.CMDLine)
-
-	if strings.HasPrefix(p.CMDLine, "ID_CONTENEDOR=") {
-		return strings.TrimPrefix(p.CMDLine, "ID_CONTENEDOR=")
-	}
-
-	if strings.HasPrefix(p.CMDLine, "ID_CONTENEDOR_APROX") {
-		return ""
-	}
-
-	partes := strings.Fields(p.CMDLine)
-	for _, parte := range partes {
-		if strings.HasPrefix(parte, "low_") ||
-			strings.HasPrefix(parte, "high_cpu_") ||
-			strings.HasPrefix(parte, "high_ram_") {
-			return parte
-		}
-	}
-
-	cmd := strings.ToLower(p.CMDLine)
-
-	if strings.Contains(cmd, "go-client") {
-		return "high_ram"
-	}
-	if strings.Contains(cmd, "sleep") {
-		return "low"
-	}
-	if strings.Contains(cmd, "bc") || strings.Contains(cmd, "2^20") {
-		return "high_cpu"
-	}
-
-	return ""
-}
-
-func obtenerPrefijosPorTipo(p Proceso) []string {
-	switch tipoContenedor(p) {
-	case TipoBajo:
-		return []string{"low_"}
-	case TipoAlto:
-		return []string{"high_cpu_", "high_ram_"}
-	default:
-		return nil
-	}
-}
-
-func buscarContenedorPorPrefijos(prefijos []string) string {
-	if len(prefijos) == 0 {
-		return ""
-	}
-
-	cmd := exec.Command("docker", "ps", "--format", "{{.Names}}")
-	salida, err := cmd.CombinedOutput()
+	claveMemoria := fmt.Sprintf("memoria:%d", timestamp)
+	err := rdb.HSet(ctx, claveMemoria, map[string]interface{}{
+		"ram_total_kb":   datos.RAMTotalKB,
+		"ram_libre_kb":   datos.RAMLibreKB,
+		"ram_usada_kb":   datos.RAMUsadaKB,
+		"total_procesos": datos.TotalProcesos,
+		"timestamp":      timestamp,
+	}).Err()
 	if err != nil {
-		log.Printf("DAEMON: no se pudo listar contenedores docker: %v", err)
-		return ""
+		return err
 	}
 
-	lineas := strings.Split(strings.TrimSpace(string(salida)), "\n")
-	for _, nombre := range lineas {
-		nombre = strings.TrimSpace(nombre)
-		if nombre == "" {
-			continue
+	rdb.Expire(ctx, claveMemoria, 30*time.Minute)
+
+	for _, p := range datos.Procesos {
+		claveProceso := fmt.Sprintf("proceso:%d:%d", p.PID, timestamp)
+
+		err = rdb.HSet(ctx, claveProceso, map[string]interface{}{
+			"pid":                 p.PID,
+			"nombre":              p.Nombre,
+			"comando":             p.Comando,
+			"vsz_kb":              p.VSZKB,
+			"rss_kb":              p.RSSKB,
+			"memoria_porcentaje":  p.MemoriaPorcentaje,
+			"cpu_porcentaje":      p.CPUPorcentaje,
+			"timestamp":           timestamp,
+		}).Err()
+		if err != nil {
+			return err
 		}
-		nombreLower := strings.ToLower(nombre)
-		if strings.Contains(nombreLower, "grafana") || strings.Contains(nombreLower, "valkey") {
-			continue
-		}
-		for _, prefijo := range prefijos {
-			if strings.HasPrefix(nombre, prefijo) {
-				log.Printf("DAEMON: fallback encontró contenedor %s para prefijo %s", nombre, prefijo)
-				return nombre
-			}
-		}
+
+		rdb.Expire(ctx, claveProceso, 30*time.Minute)
 	}
 
-	return ""
-}
-
-func eliminarContenedor(p Proceso, motivo string) {
-	if esProcesoIgnorable(p) {
-		log.Printf("DAEMON: proceso ignorado, no se elimina -> PID=%d NOMBRE=%s", p.PID, p.Nombre)
-		return
-	}
-
-	nombreContenedor := obtenerNombreContenedor(p)
-
-	if nombreContenedor == "" {
-		prefijos := obtenerPrefijosPorTipo(p)
-		nombreContenedor = buscarContenedorPorPrefijos(prefijos)
-	}
-
-	if nombreContenedor == "" {
-		log.Printf("DAEMON: no se pudo identificar nombre/ID de contenedor para PID=%d", p.PID)
-		return
-	}
-
-	log.Printf("DAEMON: intentando eliminar contenedor=%s motivo=%s", nombreContenedor, motivo)
-
-	cmd := exec.Command("docker", "rm", "-f", nombreContenedor)
-	salida, err := cmd.CombinedOutput()
-	if len(salida) > 0 {
-		log.Printf("DAEMON: salida eliminación contenedor %s:\n%s", nombreContenedor, string(salida))
-	}
-
-	estado := "ok"
-	if err != nil {
-		estado = "error"
-		log.Printf("DAEMON: no se pudo eliminar contenedor %s: %v", nombreContenedor, err)
-	} else {
-		log.Printf("DAEMON: contenedor eliminado correctamente -> %s motivo=%s", nombreContenedor, motivo)
-	}
-
-	claveEvento := fmt.Sprintf("so1:eliminado:%d:%d", p.PID, time.Now().UnixMilli())
-	datosEvento := map[string]interface{}{
-		"pid":        p.PID,
-		"nombre":     p.Nombre,
-		"contenedor": nombreContenedor,
-		"cmdline":    p.CMDLine,
-		"rss_kb":     p.RSSKB,
-		"cpu_pct":    p.CPUPct,
-		"vsz_kb":     p.VSZKB,
-		"motivo":     motivo,
-		"estado":     estado,
-		"timestamp":  time.Now().UnixMilli(),
-	}
-
-	_ = valkey.HSet(ctx, claveEvento, datosEvento).Err()
-	_ = valkey.Expire(ctx, claveEvento, ttlRegistros).Err()
+	return nil
 }
