@@ -1,0 +1,10 @@
+# Ignorar datos persistentes de Grafana y Valkey
+grafana-valkey/grafana-data/
+grafana-valkey/valkey-data/
+
+# Ignorar archivos binarios o compilados (si los hay)
+daemon-bin/
+
+# Archivos temporales o de sistema
+.DS_Store
+*.log
