@@ -1,30 +1,21 @@
 #!/bin/bash
+echo "--- INICIANDO SISTEMA (MODO PERSISTENTE) ---"
 
-set -e
+# 1. Compilar el Daemon (Siempre para tener la última lógica)
+echo "🔨 Compilando Daemon de Go..."
+cd go_daemon || exit 1
+go build -o ../sopes-daemon daemon.go
+cd .. || exit 1
 
-echo "========================================"
-echo "Iniciando sistema Proyecto 2"
-echo "========================================"
-
-echo "[1] Compilando daemon..."
-if ! (cd daemon && go build -o ../daemon-bin .); then
-    echo "[ERROR] No se pudo compilar el daemon"
-    exit 1
+# 2. Reiniciar el proceso del daemon si ya existe
+if [ -f daemon.pid ]; then
+    echo "Reiniciando proceso del Daemon..."
+    kill "$(cat daemon.pid)" 2>/dev/null
+    rm -f daemon.pid
 fi
 
-echo "[2] Levantando Grafana y Valkey..."
-cd grafana-valkey
-docker compose up -d
-cd ..
+# 3. Iniciar daemon
+./sopes-daemon &
+echo $! > daemon.pid
 
-echo "[3] Iniciando daemon..."
-./daemon-bin &
-
-DAEMON_PID=$!
-echo $DAEMON_PID > daemon.pid
-
-echo "========================================"
-echo "Sistema iniciado correctamente"
-echo "PID del daemon: $DAEMON_PID"
-echo "Grafana disponible en: http://localhost:3001"
-echo "========================================"
+echo "Daemon iniciado correctamente."

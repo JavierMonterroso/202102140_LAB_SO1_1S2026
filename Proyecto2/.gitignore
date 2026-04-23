@@ -1,10 +1,29 @@
-# Ignorar datos persistentes de Grafana y Valkey
 grafana-valkey/grafana-data/
 grafana-valkey/valkey-data/
 
-# Ignorar archivos binarios o compilados (si los hay)
-daemon-bin/
+go_daemon/daemon
+*.exe
+*.out
+*.test
+vendor/
 
-# Archivos temporales o de sistema
 .DS_Store
 *.log
+*.tmp
+*.swp
+
+*.o
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+*.cmd
+*.symvers
+modules.order
+Module.symvers
+
+daemon-bin/
+build/
+dist/
+
+__pycache__/

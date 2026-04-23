@@ -1,34 +1,31 @@
 #!/bin/bash
+echo "--- DETENIENDO SERVICIO (MANTENIENDO DATOS) ---"
 
-set -e
-
-echo "========================================"
-echo "Deteniendo sistema Proyecto 2"
-echo "========================================"
-
-echo "[1] Deteniendo daemon..."
+# 1. Matar el Daemon
 if [ -f daemon.pid ]; then
-    PID=$(cat daemon.pid)
-    kill "$PID" 2>/dev/null || true
+    kill "$(cat daemon.pid)" 2>/dev/null
     rm -f daemon.pid
-    echo "Daemon detenido"
-else
-    echo "No se encontro daemon.pid"
+    echo "   - Daemon detenido."
 fi
 
-echo "[2] Eliminando cronjob..."
-(crontab -l 2>/dev/null | grep -v "crear_contenedores.sh") | crontab -
-echo "Cronjob eliminado"
+# 2. Quitar solo el cronjob del proyecto
+if [ -f sopes-daemon ]; then
+    EJECUTABLE="$(realpath ./sopes-daemon)"
+    (crontab -l 2>/dev/null | grep -F -v "$EJECUTABLE spawn") | crontab -
+    echo "   - Cronjob del proyecto eliminado."
+else
+    echo "   - No se encontró sopes-daemon; no se pudo limpiar el cronjob por ruta."
+fi
 
-echo "[3] Descargando modulo..."
-sudo rmmod continfo_pr2_so1 2>/dev/null || true
-echo "Modulo descargado"
+# 3. Solo DETENER la infraestructura (SIN BORRAR)
+cd grafana-valkey || exit 1
+docker compose stop
+cd .. || exit 1
+echo "   - Grafana y Valkey se quedaron en pausa (datos guardados)."
 
-echo "[4] Bajando Grafana y Valkey..."
-cd grafana-valkey
-docker compose down
-cd ..
+# 4. Limpiar los contenedores de carga (Alpine / Go-client)
+echo "🧹 Limpiando carga de trabajo (Alpine/Go-client)..."
+docker rm -f $(docker ps -a -q --filter "ancestor=alpine") 2>/dev/null
+docker rm -f $(docker ps -a -q --filter "ancestor=roldyoran/go-client") 2>/dev/null
 
-echo "========================================"
-echo "Sistema detenido correctamente"
-echo "========================================"
+echo "Todo en orden. La infraestructura está lista para la siguiente ejecución."
