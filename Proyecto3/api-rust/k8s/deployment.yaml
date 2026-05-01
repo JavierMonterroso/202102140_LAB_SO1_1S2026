@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-rust-deploy
+  namespace: py3-202102140
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-rust
+  template:
+    metadata:
+      labels:
+        app: api-rust
+    spec:
+      containers:
+        - name: api-rust
+          image: javiermonterroso14/api-rust:202102140
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: GO_INGEST_HOST
+              value: go-ingest-service
+            - name: GO_INGEST_PORT
+              value: "80"
+            - name: GO_INGEST_PATH
+              value: /report
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "50m"
+              memory: "64Mi"

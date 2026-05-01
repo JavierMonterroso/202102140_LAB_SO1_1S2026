@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-ingest-deploy
+  namespace: py3-202102140
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: go-ingest
+  template:
+    metadata:
+      labels:
+        app: go-ingest
+    spec:
+      containers:
+        - name: go-rest-api
+          image: javiermonterroso14/go-rest-api:202102140
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8081
+          env:
+            - name: GRPC_CLIENT_URL
+              value: http://localhost:50052/send
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "128Mi"
+        - name: go-grpc-client
+          image: javiermonterroso14/go-grpc-client:202102140
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 50052
+          env:
+            - name: GRPC_SERVER_ADDR
+              value: go-processing-service:50051
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "128Mi"

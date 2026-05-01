@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-processing-deploy
+  namespace: py3-202102140
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: go-processing
+  template:
+    metadata:
+      labels:
+        app: go-processing
+    spec:
+      containers:
+        - name: go-grpc-server
+          image: javiermonterroso14/go-grpc-server:202102140
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 50051
+          env:
+            - name: WRITER_URL
+              value: http://localhost:50053/publish
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "128Mi"
+        - name: go-rabbit-writer
+          image: javiermonterroso14/go-rabbit-writer:202102140
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 50053
+          env:
+            - name: RABBITMQ_URL
+              value: amqp://guest:guest@rabbitmq-service:5672/
+            - name: RABBITMQ_QUEUE
+              value: reportes
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "128Mi"
+

@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go-rabbit-consumer-deploy
+  namespace: py3-202102140
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: go-rabbit-consumer
+  template:
+    metadata:
+      labels:
+        app: go-rabbit-consumer
+    spec:
+      containers:
+        - name: go-rabbit-consumer
+          image: javiermonterroso14/go-rabbit-consumer:202102140
+          imagePullPolicy: Always
+          env:
+            - name: RABBITMQ_URL
+              value: amqp://guest:guest@rabbitmq-service:5672/
+            - name: RABBITMQ_QUEUE
+              value: reportes
+            - name: VALKEY_ADDR
+              value: valkey-service:6379
+            - name: VALKEY_PASSWORD
+              value: ""
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "128Mi"

@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: go-ingest-service
+  namespace: py3-202102140
+spec:
+  selector:
+    app: go-ingest
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8081
+      protocol: TCP

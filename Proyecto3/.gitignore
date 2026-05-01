@@ -3,14 +3,19 @@
 # =========================
 target/
 **/target/
-Cargo.lock
 
 # =========================
 # PYTHON / LOCUST
 # =========================
 venv/
+**/venv/
+.venv/
+**/.venv/
 __pycache__/
+**/__pycache__/
 *.pyc
+.pytest_cache/
+**/.pytest_cache/
 
 # =========================
 # GO
@@ -18,6 +23,35 @@ __pycache__/
 bin/
 *.exe
 *.out
+*.test
+coverage.out
+go/deployment1/rest-api/rest-api
+go/deployment1/grpc-client/grpc-client
+
+# =========================
+# LOCAL / SECRETS
+# =========================
+.env
+.env.*
+*.local
+.codex
+../.codex
+
+# =========================
+# LOGS / TEMP
+# =========================
+*.log
+*.tmp
+*.bak
+tmp/
+**/tmp/
+
+# =========================
+# DATA / DATABASES
+# =========================
+*.db
+*.sqlite
+*.sqlite3
 
 # =========================
 # SISTEMA
