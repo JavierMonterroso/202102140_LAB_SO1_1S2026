@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/rabbitmq/amqp091-go"
 	"github.com/redis/go-redis/v9"
@@ -93,27 +94,35 @@ func main() {
 }
 
 func saveReport(ctx context.Context, client *redis.Client, report WarReport) error {
-	reportJSON, err := json.Marshal(report)
-	if err != nil {
-		return err
-	}
+	country := strings.ToLower(report.Country)
+	planes := int64(report.WarplanesInAir)
+	ships := int64(report.WarshipsInWater)
 
 	pipe := client.Pipeline()
-	pipe.RPush(ctx, "war_reports:raw", string(reportJSON))
-	pipe.Incr(ctx, "war_reports:total")
-	pipe.Incr(ctx, "war_reports:country:"+report.Country+":total")
-	pipe.ZIncrBy(ctx, "war_reports:planes_by_country", float64(report.WarplanesInAir), report.Country)
-	pipe.ZIncrBy(ctx, "war_reports:ships_by_country", float64(report.WarshipsInWater), report.Country)
-	pipe.ZIncrBy(ctx, "war_reports:planes_mode", 1, strconv.Itoa(int(report.WarplanesInAir)))
-	pipe.ZIncrBy(ctx, "war_reports:ships_mode", 1, strconv.Itoa(int(report.WarshipsInWater)))
-	pipe.LPush(ctx, "war_reports:country:"+report.Country+":series", string(reportJSON))
-	pipe.LTrim(ctx, "war_reports:country:"+report.Country+":series", 0, 499)
+	pipe.Set(ctx, "pais_asignado", "USA", 0)
+	pipe.Incr(ctx, "total_reportes")
+	pipe.ZAdd(ctx, "top_paises_aviones", redis.Z{Score: float64(planes), Member: country})
+	pipe.ZAdd(ctx, "top_paises_barcos", redis.Z{Score: float64(ships), Member: country})
+	planesFrequency := pipe.HIncrBy(ctx, "frecuencia_aviones", strconv.FormatInt(planes, 10), 1)
+	shipsFrequency := pipe.HIncrBy(ctx, "frecuencia_barcos", strconv.FormatInt(ships, 10), 1)
+	if country == "usa" {
+		pipe.Incr(ctx, "total_reportes_usa")
+	}
 
 	cmds, err := pipe.Exec(ctx)
 	if err != nil {
 		return redisPipelineError(err, cmds)
 	}
-	return updateMinMax(ctx, client, report)
+	if err := updateLegacyMinMax(ctx, client, planes, ships); err != nil {
+		return err
+	}
+	if err := updateLegacyMode(ctx, client, "moda_aviones", "max_frecuencia_aviones_conteo", planes, planesFrequency.Val()); err != nil {
+		return err
+	}
+	if err := updateLegacyMode(ctx, client, "moda_barcos", "max_frecuencia_barcos_conteo", ships, shipsFrequency.Val()); err != nil {
+		return err
+	}
+	return saveAssignedCountrySeries(ctx, client, country, planes, ships)
 }
 
 func redisPipelineError(execErr error, cmds []redis.Cmder) error {
@@ -125,17 +134,47 @@ func redisPipelineError(execErr error, cmds []redis.Cmder) error {
 	return execErr
 }
 
-func updateMinMax(ctx context.Context, client *redis.Client, report WarReport) error {
-	if err := updateMetric(ctx, client, "war_reports:max_planes", int64(report.WarplanesInAir), true); err != nil {
+func updateLegacyMinMax(ctx context.Context, client *redis.Client, planes, ships int64) error {
+	if err := updateMetric(ctx, client, "max_aviones", planes, true); err != nil {
 		return err
 	}
-	if err := updateMetric(ctx, client, "war_reports:min_planes", int64(report.WarplanesInAir), false); err != nil {
+	if err := updateMetric(ctx, client, "min_aviones", planes, false); err != nil {
 		return err
 	}
-	if err := updateMetric(ctx, client, "war_reports:max_ships", int64(report.WarshipsInWater), true); err != nil {
+	if err := updateMetric(ctx, client, "max_barcos", ships, true); err != nil {
 		return err
 	}
-	return updateMetric(ctx, client, "war_reports:min_ships", int64(report.WarshipsInWater), false)
+	return updateMetric(ctx, client, "min_barcos", ships, false)
+}
+
+func updateLegacyMode(ctx context.Context, client *redis.Client, modeKey, maxFrequencyKey string, value, newFrequency int64) error {
+	maxFrequency, err := client.Get(ctx, maxFrequencyKey).Int64()
+	if err != nil && err != redis.Nil {
+		return err
+	}
+	if err == redis.Nil || newFrequency > maxFrequency {
+		if err := client.Set(ctx, modeKey, value, 0).Err(); err != nil {
+			return err
+		}
+		return client.Set(ctx, maxFrequencyKey, newFrequency, 0).Err()
+	}
+	return nil
+}
+
+func saveAssignedCountrySeries(ctx context.Context, client *redis.Client, country string, planes, ships int64) error {
+	if country != "usa" {
+		return nil
+	}
+
+	return client.XAdd(ctx, &redis.XAddArgs{
+		Stream: "serie_usa_trafico",
+		MaxLen: 100,
+		Approx: true,
+		Values: map[string]interface{}{
+			"aviones": planes,
+			"barcos":  ships,
+		},
+	}).Err()
 }
 
 func updateMetric(ctx context.Context, client *redis.Client, key string, value int64, keepMax bool) error {
